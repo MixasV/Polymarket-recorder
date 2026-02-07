@@ -341,12 +341,21 @@ class DataRecorder:
     async def start(self):
         disable_quick_edit()
         
-        # Proxy choice
+        # Proxy choice (Non-interactive for server usage)
         import data.clients as clients
-        sys.stdout.write("Use proxy for Polymarket? (y/n, default 'y'): ")
-        sys.stdout.flush()
-        choice = sys.stdin.readline().strip().lower()
-        clients.USE_PROXY = choice != 'n'
+        proxy_env = os.getenv("USE_PROXY", "").lower()
+        if proxy_env:
+            clients.USE_PROXY = proxy_env in ("y", "yes", "true", "1")
+        else:
+            # Fallback to interactive only if in a TTY/interactive shell
+            if sys.stdin.isatty():
+                sys.stdout.write("Use proxy for Polymarket? (y/n, default 'y'): ")
+                sys.stdout.flush()
+                choice = sys.stdin.readline().strip().lower()
+                clients.USE_PROXY = choice != 'n'
+            else:
+                clients.USE_PROXY = True # Default for non-interactive
+        
         proxy_status = "ENABLED" if clients.USE_PROXY else "DISABLED"
         print(f"Proxy is {proxy_status}")
         

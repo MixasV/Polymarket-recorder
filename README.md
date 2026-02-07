@@ -95,80 +95,68 @@ python data_recorder.py
 
 ---
 
+## Autostart & Reliability
+
+### 🐧 Linux (systemd) - Recommended
+To ensure the recorder starts on boot and restarts automatically if it crashes:
+1. Edit `recorder.service` and update `User`, `WorkingDirectory`, and `ExecStart` paths.
+2. Copy the service file:
+   ```bash
+   sudo cp recorder.service /etc/systemd/system/recorder.service
+   ```
+3. Enable and start:
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl enable recorder
+   sudo systemctl start recorder
+   ```
+4. Check logs: `journalctl -u recorder -f`
+
+### 🪟 Windows (Task Scheduler)
+1. Open **Task Scheduler** and create a new task.
+2. Set **Trigger** to "At log on" or "At startup".
+3. Set **Action** to "Start a program":
+   - **Program**: `path\to\venv\Scripts\python.exe`
+   - **Arguments**: `data_recorder.py`
+   - **Start in**: `path\to\Polymarket-recorder`
+4. In **Settings**, check "If the task fails, restart every: 1 minute".
+
+### ⚙️ Non-interactive Mode
+The script detects if it's running in a service. You can force proxy settings via environment variables:
+- `USE_PROXY=true` or `USE_PROXY=false`
+
+---
+
 # Регистратор данных Polymarket BTC 15m (RU)
 
 Скрипт для непрерывной записи цен Bitcoin (Binance) и данных рынков Polymarket в режиме реального времени. Предназначен для сбора данных для бэктестов и анализа стратегий.
 
-## Инструкция по установке
+## Автозапуск и отказоустойчивость
 
-### Требования
-- **Python 3.10 или выше**
-- **Git**
+### 🐧 Linux (systemd) — Рекомендуется
+Для автоматического запуска при загрузке и перезапуске при сбоях:
+1. Отредактируйте `recorder.service`, указав правильные пути в `User`, `WorkingDirectory` и `ExecStart`.
+2. Скопируйте файл сервиса:
+   ```bash
+   sudo cp recorder.service /etc/systemd/system/recorder.service
+   ```
+3. Активируйте и запустите:
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl enable recorder
+   sudo systemctl start recorder
+   ```
+4. Просмотр логов: `journalctl -u recorder -f`
 
-### 🪟 Установка на Windows
-1. **Клонируйте репозиторий**:
-   ```bash
-   git clone https://github.com/MixasV/Polymarket-recorder.git
-   cd Polymarket-recorder
-   ```
-2. **Создайте виртуальное окружение**:
-   ```bash
-   python -m venv venv
-   ```
-3. **Активируйте окружение**:
-   ```bash
-   .\venv\Scripts\activate
-   ```
-4. **Установите зависимости**:
-   ```bash
-   pip install -r requirements.txt
-   ```
+### 🪟 Windows (Планировщик задач)
+1. Откройте **Планировщик задач** и создайте новую задачу.
+2. **Триггер**: "При входе в систему" или "При запуске".
+3. **Действие**: "Запуск программы":
+   - **Программа**: `путь\к\venv\Scripts\python.exe`
+   - **Аргументы**: `data_recorder.py`
+   - **Рабочая папка**: `путь\к\Polymarket-recorder`
+4. В **Параметрах** включите "При сбое перезапускать через: 1 мин".
 
-### 🐧 Установка на Linux (Ubuntu/Debian)
-1. **Клонируйте репозиторий**:
-   ```bash
-   git clone https://github.com/MixasV/Polymarket-recorder.git
-   cd Polymarket-recorder
-   ```
-2. **Установите пакет venv** (если не установлен):
-   ```bash
-   sudo apt update
-   sudo apt install python3-venv -y
-   ```
-3. **Создайте виртуальное окружение**:
-   ```bash
-   python3 -m venv venv
-   ```
-4. **Активируйте окружение**:
-   ```bash
-   source venv/bin/activate
-   ```
-5. **Установите зависимости**:
-   ```bash
-   pip install --upgrade pip
-   pip install -r requirements.txt
-   ```
-
-## Использование
-
-### Запуск
-```bash
-python data_recorder.py
-```
-При запуске скрипт спросит: `Use proxy for Polymarket? (y/n)`.
-- Нажмите **y** или **Enter** для использования прокси.
-- Нажмите **n** для прямого подключения.
-
-### Запуск в фоне (Linux)
-Используйте `screen` для стабильной работы:
-```bash
-screen -S recorder
-source venv/bin/activate
-python data_recorder.py
-# Нажмите Ctrl+A, затем D для выхода из сессии
-```
-
-## Структура данных
-Данные сохраняются в `db/recorder_YYYY-MM-DD.db`:
-- `market_snapshots`: Посекундные котировки (~3 записи в секунду).
-- `system_events`: Журнал переключения рынков и ошибок связи.
+### ⚙️ Неинтерактивный режим
+Скрипт автоматически определяет запуск в фоне. Вы можете принудительно задать использование прокси через переменную окружения:
+- `USE_PROXY=true` или `USE_PROXY=false`
