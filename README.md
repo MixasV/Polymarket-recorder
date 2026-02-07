@@ -11,52 +11,164 @@ Continuous real-time data recorder for Bitcoin prices (Binance) and Polymarket p
 - **Real-time Console UI**: Live status line showing current prices, latency (lag), and connection status.
 - **Proxy Support**: Built-in support for proxies to bypass regional restrictions on Polymarket APIs.
 
-## Installation
+---
 
-1. **Requirements**: Python 3.10 or higher.
-2. **Setup**:
+## Installation Guide
+
+### Prerequisites
+- **Python 3.10 or higher**
+- **Git**
+
+### 🪟 Windows Installation
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/MixasV/Polymarket-recorder.git
+   cd Polymarket-recorder
+   ```
+2. **Create a virtual environment**:
+   ```bash
+   python -m venv venv
+   ```
+3. **Activate the environment**:
+   ```bash
+   .\venv\Scripts\activate
+   ```
+4. **Install dependencies**:
    ```bash
    pip install -r requirements.txt
    ```
-3. **Configuration**: Ensure your `.env` file (if used) is configured or be ready to toggle proxy settings on startup.
+
+### 🐧 Linux Installation (Ubuntu/Debian/CentOS)
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/MixasV/Polymarket-recorder.git
+   cd Polymarket-recorder
+   ```
+2. **Install Python venv package** (if missing):
+   ```bash
+   sudo apt update
+   sudo apt install python3-venv -y
+   ```
+3. **Create a virtual environment**:
+   ```bash
+   python3 -m venv venv
+   ```
+4. **Activate the environment**:
+   ```bash
+   source venv/bin/activate
+   ```
+5. **Install dependencies**:
+   ```bash
+   pip install --upgrade pip
+   pip install -r requirements.txt
+   ```
+
+---
 
 ## Usage
 
-Start the recorder:
+### Running the Recorder
+1. Ensure your environment is activated.
+2. Start the script:
+   ```bash
+   python data_recorder.py
+   ```
+3. On startup, the script will ask: `Use proxy for Polymarket? (y/n)`. 
+   - Press **Enter** or **y** to enable proxy (configured in `data/clients.py`).
+   - Press **n** for direct connection.
+
+### Running in background (Linux)
+To keep the recorder running after closing the SSH session, use `screen` or `tmux`:
 ```bash
+screen -S recorder
+source venv/bin/activate
 python data_recorder.py
+# Press Ctrl+A then D to detach
 ```
 
-### Console Indicators:
+### Console Indicators
 - `BNC`: Latest Binance BTC price.
 - `ORC`: Latest Polymarket Oracle price.
 - `LAG`: Latency between Binance and Oracle in milliseconds.
 - `U/D`: Best Bid/Ask for UP and DOWN tokens.
 - `Mkt`: Currently active Polymarket 15m BTC market.
 
-## Data Structure
-
-Data is stored in `db/recorder_YYYY-MM-DD.db` with the following tables:
-- `market_snapshots`: Tick-by-tick price data (~3Hz).
-- `system_events`: Logs of market switches, connection issues, and resolutions.
-
 ---
 
-# Регистратор данных Polymarket BTC 15m
+# Регистратор данных Polymarket BTC 15m (RU)
 
-Скрипт для непрерывной записи цен Bitcoin (Binance) и данных рынков Polymarket в режиме реального времени.
+Скрипт для непрерывной записи цен Bitcoin (Binance) и данных рынков Polymarket в режиме реального времени. Предназначен для сбора данных для бэктестов и анализа стратегий.
 
-## Основные возможности
+## Инструкция по установке
 
-- **Запись из нескольких источников**: Binance, Polymarket Orderbook, Oracle (RTDS) и целевые цены (Target Prices).
-- **Фоновая запись в БД**: Использование отдельного потока `DBWriter` для неблокирующей записи в SQLite.
-- **Ротация базы данных**: Ежедневное создание новой БД (`db/recorder_YYYY-MM-DD.db`).
-- **Мониторинг здоровья**: Встроенный ворчдог для контроля стабильности соединений.
-- **Прокси**: Поддержка прокси для работы с API Polymarket.
+### Требования
+- **Python 3.10 или выше**
+- **Git**
 
-## Запуск
+### 🪟 Установка на Windows
+1. **Клонируйте репозиторий**:
+   ```bash
+   git clone https://github.com/MixasV/Polymarket-recorder.git
+   cd Polymarket-recorder
+   ```
+2. **Создайте виртуальное окружение**:
+   ```bash
+   python -m venv venv
+   ```
+3. **Активируйте окружение**:
+   ```bash
+   .\venv\Scripts\activate
+   ```
+4. **Установите зависимости**:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
+### 🐧 Установка на Linux (Ubuntu/Debian)
+1. **Клонируйте репозиторий**:
+   ```bash
+   git clone https://github.com/MixasV/Polymarket-recorder.git
+   cd Polymarket-recorder
+   ```
+2. **Установите пакет venv** (если не установлен):
+   ```bash
+   sudo apt update
+   sudo apt install python3-venv -y
+   ```
+3. **Создайте виртуальное окружение**:
+   ```bash
+   python3 -m venv venv
+   ```
+4. **Активируйте окружение**:
+   ```bash
+   source venv/bin/activate
+   ```
+5. **Установите зависимости**:
+   ```bash
+   pip install --upgrade pip
+   pip install -r requirements.txt
+   ```
+
+## Использование
+
+### Запуск
 ```bash
 python data_recorder.py
 ```
-При запуске скрипт предложит включить или выключить прокси.
+При запуске скрипт спросит: `Use proxy for Polymarket? (y/n)`.
+- Нажмите **y** или **Enter** для использования прокси.
+- Нажмите **n** для прямого подключения.
+
+### Запуск в фоне (Linux)
+Используйте `screen` для стабильной работы:
+```bash
+screen -S recorder
+source venv/bin/activate
+python data_recorder.py
+# Нажмите Ctrl+A, затем D для выхода из сессии
+```
+
+## Структура данных
+Данные сохраняются в `db/recorder_YYYY-MM-DD.db`:
+- `market_snapshots`: Посекундные котировки (~3 записи в секунду).
+- `system_events`: Журнал переключения рынков и ошибок связи.
