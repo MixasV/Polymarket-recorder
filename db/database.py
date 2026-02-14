@@ -3,9 +3,11 @@
 Database schema for paper trading system.
 
 Tables:
+- btc_prices: BTC price ticks (Binance + Oracle) - shared across 15m/5m
+- market_snapshots: 15m market price snapshots (UP/DOWN bid/ask)
+- market_snapshots_5m: 5m market price snapshots (UP/DOWN bid/ask)
 - trades: All executed trades
 - positions: Current and historical positions
-- market_snapshots: Price snapshots every second
 - strategy_stats: Statistics per strategy variation
 - system_events: System events and errors
 """
@@ -82,9 +84,39 @@ class TradingDatabase:
             )
         """)
         
-        # Market snapshots
+        # BTC prices (shared between 15m and 5m markets)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS btc_prices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                binance_price REAL,
+                oracle_price REAL,
+                lag_ms INTEGER
+            )
+        """)
+
+        # 15m market snapshots (UP/DOWN prices only, BTC prices in btc_prices)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS market_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                market_slug TEXT NOT NULL,
+                oracle_price REAL,
+                binance_price REAL,
+                up_bid REAL,
+                up_ask REAL,
+                up_mid REAL,
+                down_bid REAL,
+                down_ask REAL,
+                down_mid REAL,
+                time_to_expiry INTEGER,
+                metadata TEXT
+            )
+        """)
+
+        # 5m market snapshots
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS market_snapshots_5m (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp TEXT NOT NULL,
                 market_slug TEXT NOT NULL,
@@ -182,6 +214,9 @@ class TradingDatabase:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_trades_time ON trades(entry_time)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_positions_strategy ON positions(strategy, variation)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_time ON market_snapshots(timestamp)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_5m_time ON market_snapshots_5m(timestamp)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_5m_slug ON market_snapshots_5m(market_slug)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_btc_prices_time ON btc_prices(timestamp)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_stats_strategy ON strategy_stats(strategy, variation)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_portfolios_name ON portfolios(name)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_portfolio_trades_pid ON portfolio_trades(portfolio_id)")
@@ -407,7 +442,7 @@ class TradingDatabase:
     # ==================== MARKET SNAPSHOTS ====================
     
     def insert_market_snapshot(self, snapshot: Dict[str, Any]):
-        """Insert market price snapshot"""
+        """Insert 15m market price snapshot"""
         cursor = self.conn.cursor()
         cursor.execute("""
             INSERT INTO market_snapshots (
@@ -430,6 +465,42 @@ class TradingDatabase:
             snapshot.get('time_to_expiry'),
             json.dumps(snapshot.get('metadata', {}))
         ))
+        self.conn.commit()
+
+    def insert_market_snapshot_5m(self, snapshot: Dict[str, Any]):
+        """Insert 5m market price snapshot"""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT INTO market_snapshots_5m (
+                timestamp, market_slug, oracle_price, binance_price,
+                up_bid, up_ask, up_mid,
+                down_bid, down_ask, down_mid,
+                time_to_expiry, metadata
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            snapshot['timestamp'],
+            snapshot['market_slug'],
+            snapshot.get('oracle_price'),
+            snapshot.get('binance_price'),
+            snapshot.get('up_bid'),
+            snapshot.get('up_ask'),
+            snapshot.get('up_mid'),
+            snapshot.get('down_bid'),
+            snapshot.get('down_ask'),
+            snapshot.get('down_mid'),
+            snapshot.get('time_to_expiry'),
+            json.dumps(snapshot.get('metadata', {}))
+        ))
+        self.conn.commit()
+
+    def insert_btc_price(self, timestamp: str, binance_price: float,
+                         oracle_price: float = None, lag_ms: int = None):
+        """Insert BTC price tick (shared between 15m and 5m)"""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT INTO btc_prices (timestamp, binance_price, oracle_price, lag_ms)
+            VALUES (?, ?, ?, ?)
+        """, (timestamp, binance_price, oracle_price, lag_ms))
         self.conn.commit()
     
     # ==================== STRATEGY STATS ====================

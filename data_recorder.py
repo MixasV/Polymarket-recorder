@@ -19,7 +19,7 @@ from collections import deque
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from data.clients import BinanceClient, CLOBClient, RTDSClient, MarketDiscovery
+from data.clients import BinanceClient, CLOBClient, RTDSClient, MarketDiscovery, MarketDiscovery5m
 from data.polymarket_target_api import PolymarketTargetPriceAPI
 from db.database import TradingDatabase
 
@@ -102,7 +102,7 @@ class DataRecorder:
         self.db = None
         self.db_writer = DBWriter()
         
-        # Market Data
+        # Market Data - 15m
         self.current_market = None
         self.market_history = {} # slug -> token_ids cache for resolution matching
         self.binance_price = None
@@ -111,12 +111,23 @@ class DataRecorder:
         self.up_prices = None
         self.down_prices = None
         
+        # Market Data - 5m
+        self.current_market_5m = None
+        self.market_history_5m = {}
+        self.target_price_5m = None
+        self.up_prices_5m = None
+        self.down_prices_5m = None
+        
+        # BTC price recording throttle (record ~3Hz, not every tick)
+        self.last_btc_record_ts = 0
+        
         # Health & Latency
         self.errors = []
         self.last_update_ts = {
             'binance': 0,
             'oracle': 0,
-            'clob': 0
+            'clob': 0,
+            'clob_5m': 0
         }
         self.bnc_history = deque(maxlen=100000) # Increased for consistent history across bots
         self.current_lag_ms = 0
@@ -138,6 +149,10 @@ class DataRecorder:
             self.up_prices = up_prices
             self.down_prices = down_prices
             self.last_update_ts['clob'] = time.time()
+        if self.current_market_5m and market_slug == self.current_market_5m['slug']:
+            self.up_prices_5m = up_prices
+            self.down_prices_5m = down_prices
+            self.last_update_ts['clob_5m'] = time.time()
             
     def on_rtds_update(self, oracle_price: float):
         self.oracle_price = oracle_price
@@ -174,9 +189,13 @@ class DataRecorder:
         # 1. Try to get tokens from history (most reliable for delayed events)
         if market_slug in self.market_history:
             token_ids = self.market_history[market_slug]
+        elif market_slug in self.market_history_5m:
+            token_ids = self.market_history_5m[market_slug]
         # 2. Fallback to current market
         elif self.current_market and self.current_market['slug'] == market_slug:
             token_ids = self.current_market.get('token_ids', [])
+        elif self.current_market_5m and self.current_market_5m['slug'] == market_slug:
+            token_ids = self.current_market_5m.get('token_ids', [])
             
         if len(token_ids) >= 2:
             if winning_asset_id == token_ids[0]:
@@ -184,7 +203,8 @@ class DataRecorder:
             elif winning_asset_id == token_ids[1]:
                 winner = "DOWN"
         
-        msg = f"Market Resolved: {market_slug} | Winner: {winner} ({winning_asset_id})"
+        market_type = "5m" if "5m" in market_slug else "15m"
+        msg = f"[{market_type}] Market Resolved: {market_slug} | Winner: {winner} ({winning_asset_id})"
         self.log_event("market_outcome", msg)
 
     def log_event(self, event_type: str, message: str):
@@ -228,45 +248,100 @@ class DataRecorder:
                 
                 # Save to history for resolution matching
                 self.market_history[slug] = token_ids
-                # Keep history size manageable (last 20 markets)
                 if len(self.market_history) > 20:
                     oldest_slug = next(iter(self.market_history))
                     del self.market_history[oldest_slug]
                 
                 self.clob_client.set_market(token_ids, slug)
                 self.target_price = await asyncio.to_thread(self.polymarket_api.get_target_price, slug)
-                self.log_event("market_switch", f"New market: {slug} (Strike: ${self.target_price})")
+                self.log_event("market_switch", f"[15m] New market: {slug} (Strike: ${self.target_price})")
         except Exception as e:
-            self.errors.append(f"Discovery Error: {e}")
+            self.errors.append(f"Discovery 15m Error: {e}")
+
+    async def update_market_discovery_5m(self):
+        try:
+            market = await asyncio.to_thread(MarketDiscovery5m.get_current_market)
+            if market and (not self.current_market_5m or market['slug'] != self.current_market_5m['slug']):
+                self.current_market_5m = market
+                slug = market['slug']
+                token_ids = market['token_ids']
+                
+                self.market_history_5m[slug] = token_ids
+                if len(self.market_history_5m) > 40:
+                    oldest_slug = next(iter(self.market_history_5m))
+                    del self.market_history_5m[oldest_slug]
+                
+                self.clob_client.set_market(token_ids, slug)
+                self.target_price_5m = await asyncio.to_thread(self.polymarket_api.get_target_price, slug)
+                self.log_event("market_switch", f"[5m] New market: {slug} (Strike: ${self.target_price_5m})")
+        except Exception as e:
+            self.errors.append(f"Discovery 5m Error: {e}")
 
     async def record_snapshot(self):
-        if not self.db or not self.current_market:
+        if not self.db:
             return
-            
-        try:
-            # We record even if prices are None to have a continuous timeline
-            snapshot = {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "market_slug": self.current_market['slug'],
-                "oracle_price": self.oracle_price,
-                "binance_price": self.binance_price,
-                "up_bid": self.up_prices.get("bid", 0) if self.up_prices else 0,
-                "up_ask": self.up_prices.get("ask", 0) if self.up_prices else 0,
-                "up_mid": self.up_prices.get("mid", 0) if self.up_prices else 0,
-                "down_bid": self.down_prices.get("bid", 0) if self.down_prices else 0,
-                "down_ask": self.down_prices.get("ask", 0) if self.down_prices else 0,
-                "down_mid": self.down_prices.get("mid", 0) if self.down_prices else 0,
-                "time_to_expiry": int((self.current_market['end_time'] - datetime.now(timezone.utc)).total_seconds()) if 'end_time' in self.current_market else 0,
-                "metadata": {
-                    "target_price": self.target_price, 
-                    "recorder": True,
-                    "lag_ms": self.current_lag_ms
+
+        now_utc = datetime.now(timezone.utc)
+        now_ts = time.time()
+        ts_iso = now_utc.isoformat()
+
+        # Record BTC prices (~3Hz, shared for both market types)
+        if now_ts - self.last_btc_record_ts >= 0.3 and (self.binance_price or self.oracle_price):
+            self.db_writer.add_task(
+                "insert_btc_price", ts_iso,
+                self.binance_price, self.oracle_price, self.current_lag_ms
+            )
+            self.last_btc_record_ts = now_ts
+
+        # Record 15m market snapshot
+        if self.current_market:
+            try:
+                snapshot = {
+                    "timestamp": ts_iso,
+                    "market_slug": self.current_market['slug'],
+                    "oracle_price": self.oracle_price,
+                    "binance_price": self.binance_price,
+                    "up_bid": self.up_prices.get("bid", 0) if self.up_prices else 0,
+                    "up_ask": self.up_prices.get("ask", 0) if self.up_prices else 0,
+                    "up_mid": self.up_prices.get("mid", 0) if self.up_prices else 0,
+                    "down_bid": self.down_prices.get("bid", 0) if self.down_prices else 0,
+                    "down_ask": self.down_prices.get("ask", 0) if self.down_prices else 0,
+                    "down_mid": self.down_prices.get("mid", 0) if self.down_prices else 0,
+                    "time_to_expiry": int((self.current_market['end_time'] - now_utc).total_seconds()) if 'end_time' in self.current_market else 0,
+                    "metadata": {
+                        "target_price": self.target_price,
+                        "recorder": True,
+                        "lag_ms": self.current_lag_ms
+                    }
                 }
-            }
-            # Add to background writer queue instead of direct call
-            self.db_writer.add_task("insert_market_snapshot", snapshot)
-        except Exception as e:
-            self.errors.append(f"Snapshot Queue Error: {e}")
+                self.db_writer.add_task("insert_market_snapshot", snapshot)
+            except Exception as e:
+                self.errors.append(f"15m Snapshot Error: {e}")
+
+        # Record 5m market snapshot
+        if self.current_market_5m:
+            try:
+                snapshot_5m = {
+                    "timestamp": ts_iso,
+                    "market_slug": self.current_market_5m['slug'],
+                    "oracle_price": self.oracle_price,
+                    "binance_price": self.binance_price,
+                    "up_bid": self.up_prices_5m.get("bid", 0) if self.up_prices_5m else 0,
+                    "up_ask": self.up_prices_5m.get("ask", 0) if self.up_prices_5m else 0,
+                    "up_mid": self.up_prices_5m.get("mid", 0) if self.up_prices_5m else 0,
+                    "down_bid": self.down_prices_5m.get("bid", 0) if self.down_prices_5m else 0,
+                    "down_ask": self.down_prices_5m.get("ask", 0) if self.down_prices_5m else 0,
+                    "down_mid": self.down_prices_5m.get("mid", 0) if self.down_prices_5m else 0,
+                    "time_to_expiry": int((self.current_market_5m['end_time'] - now_utc).total_seconds()) if 'end_time' in self.current_market_5m else 0,
+                    "metadata": {
+                        "target_price": self.target_price_5m,
+                        "recorder": True,
+                        "lag_ms": self.current_lag_ms
+                    }
+                }
+                self.db_writer.add_task("insert_market_snapshot_5m", snapshot_5m)
+            except Exception as e:
+                self.errors.append(f"5m Snapshot Error: {e}")
 
     async def update_heartbeat(self):
         """Update heartbeat file to show we're alive even if console is frozen"""
@@ -286,27 +361,28 @@ class DataRecorder:
         
         # Latency calculation
         curr_ts = time.time()
-        l = {k: f"{curr_ts - v:.1f}s" if v > 0 else "OFF" for k, v in self.last_update_ts.items()}
         
-        # Price strings for UP/DOWN
+        # 15m market info
         up_str = f"U:{self.up_prices['bid']:.3f}/{self.up_prices['ask']:.3f}" if self.up_prices else "U:---"
         down_str = f"D:{self.down_prices['bid']:.3f}/{self.down_prices['ask']:.3f}" if self.down_prices else "D:---"
+        mkt_15m = self.current_market['slug'][-15:] if self.current_market else 'None'
+        
+        # 5m market info
+        up5_str = f"U:{self.up_prices_5m['bid']:.3f}/{self.up_prices_5m['ask']:.3f}" if self.up_prices_5m else "U:---"
+        down5_str = f"D:{self.down_prices_5m['bid']:.3f}/{self.down_prices_5m['ask']:.3f}" if self.down_prices_5m else "D:---"
+        mkt_5m = self.current_market_5m['slug'][-14:] if self.current_market_5m else 'None'
         
         status_line = (
-            f"[{curr_time}] Run:{hours}h{minutes}m | "
-            f"BNC:{self.binance_price or 0:>8.1f} | "
-            f"ORC:{self.oracle_price or 0:>8.1f} | "
-            f"LAG:{self.current_lag_ms:>4}ms | "
-            f"{up_str} {down_str} | "
-            f"Mkt:{self.current_market['slug'] if self.current_market else 'None'}"
+            f"[{curr_time}] {hours}h{minutes}m | "
+            f"BNC:{self.binance_price or 0:>8.1f} ORC:{self.oracle_price or 0:>8.1f} LAG:{self.current_lag_ms:>4}ms | "
+            f"15m:{mkt_15m} {up_str} {down_str} | "
+            f"5m:{mkt_5m} {up5_str} {down5_str}"
         )
         
-        # Use carriage return and padding for maximum compatibility on Windows
-        sys.stdout.write(f"\r{status_line:<125}")
+        sys.stdout.write(f"\r{status_line:<160}")
         sys.stdout.flush()
         
         if self.errors:
-            # Print errors above the status line
             err = self.errors.pop(0)
             sys.stdout.write(f"\n[ERROR] {err}\n")
             sys.stdout.flush()
@@ -363,7 +439,7 @@ class DataRecorder:
         self.rtds_client.use_proxy = clients.USE_PROXY
         
         self.running = True
-        print("Starting Data Recorder (with Background DB Writer)...")
+        print("Starting Data Recorder (15m + 5m markets, with Background DB Writer)...")
         
         # Start DB writer thread
         self.db_writer.start()
@@ -376,18 +452,25 @@ class DataRecorder:
         # Start health monitor
         asyncio.create_task(self.connection_health_monitor())
         
-        last_discovery = 0
+        last_discovery_15m = 0
+        last_discovery_5m = 0
         last_heartbeat = 0
         
         try:
             while self.running:
                 await self.check_db_rotation()
                 
-                # Market discovery every 60s
                 now_ts = time.time()
-                if now_ts - last_discovery > 60:
+
+                # 15m market discovery every 60s
+                if now_ts - last_discovery_15m > 60:
                     await self.update_market_discovery()
-                    last_discovery = now_ts
+                    last_discovery_15m = now_ts
+
+                # 5m market discovery every 30s (shorter markets need faster discovery)
+                if now_ts - last_discovery_5m > 30:
+                    await self.update_market_discovery_5m()
+                    last_discovery_5m = now_ts
                 
                 # Heartbeat every 30s
                 if now_ts - last_heartbeat > 30:

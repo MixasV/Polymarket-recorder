@@ -706,6 +706,81 @@ class MarketDiscovery:
         return None
 
 
+class MarketDiscovery5m:
+    """Discover active BTC 5m markets via slug generation"""
+
+    @staticmethod
+    def get_current_market() -> Optional[Dict]:
+        """
+        Get current active BTC 5m market.
+        5m markets use slug format: btc-updown-5m-{start_timestamp}
+        where start_timestamp is aligned to 300-second intervals.
+        """
+        interval = 300
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+        current_bucket_start = now_ts - (now_ts % interval)
+
+        # Check current bucket and next one
+        candidates = [current_bucket_start, current_bucket_start + interval]
+
+        for start_ts in candidates:
+            slug = f"btc-updown-5m-{start_ts}"
+            try:
+                url = f"https://gamma-api.polymarket.com/events?slug={slug}"
+                response = requests.get(url, timeout=5, proxies=get_proxies())
+
+                if response.status_code == 200:
+                    data = response.json()
+                    if not data:
+                        continue
+
+                    event = data[0]
+                    markets = event.get("markets", [])
+                    if not markets:
+                        continue
+
+                    m = markets[0]
+
+                    if m.get("closed") or m.get("resolved"):
+                        continue
+
+                    clob_tokens = m.get("clobTokenIds", "[]")
+                    if isinstance(clob_tokens, str):
+                        clob_tokens = json.loads(clob_tokens)
+
+                    event_start_time = m.get("eventStartTime")
+                    if event_start_time:
+                        event_start_time = datetime.fromisoformat(
+                            event_start_time.replace("Z", "+00:00")
+                        )
+
+                    end_time = datetime.fromtimestamp(start_ts + interval, timezone.utc)
+                    end_date_str = m.get("endDate")
+
+                    # Ensure UP is first, DOWN is second
+                    outcomes = m.get("outcomes", [])
+                    if outcomes and len(outcomes) >= 2 and len(clob_tokens) >= 2:
+                        first_outcome = str(outcomes[0]).lower()
+                        if first_outcome in ["no", "below", "down"]:
+                            clob_tokens = [clob_tokens[1], clob_tokens[0]]
+
+                    return {
+                        "question": m.get("question"),
+                        "description": m.get("description"),
+                        "condition_id": m.get("conditionId"),
+                        "token_ids": clob_tokens,
+                        "end_date": end_date_str,
+                        "end_time": end_time,
+                        "slug": m.get("slug"),
+                        "event_start_time": event_start_time,
+                    }
+
+            except Exception as e:
+                pass  # Silently retry next candidate
+
+        return None
+
+
 if __name__ == "__main__":
     # Test data clients
     async def test_clients():
