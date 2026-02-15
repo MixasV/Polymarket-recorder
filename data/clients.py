@@ -29,13 +29,20 @@ PROXY_PORT = os.getenv("PROXY_PORT", "")
 PROXY_USER = os.getenv("PROXY_USER", "")
 PROXY_PASS = os.getenv("PROXY_PASS", "")
 
-if PROXY_USER and PROXY_PASS:
-    PROXY_URL = f"http://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}"
+# Assemble PROXY_URL only if host and port are present
+if PROXY_HOST and PROXY_PORT:
+    if PROXY_USER and PROXY_PASS:
+        PROXY_URL = f"http://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}"
+    else:
+        PROXY_URL = f"http://{PROXY_HOST}:{PROXY_PORT}"
 else:
-    PROXY_URL = f"http://{PROXY_HOST}:{PROXY_PORT}"
+    PROXY_URL = None
 
-# Global proxy setting
-USE_PROXY = os.getenv("USE_PROXY", "True").lower() == "true"
+# Global proxy setting - default to False if host/port are missing or if explicitly False
+USE_PROXY = os.getenv("USE_PROXY", "False").lower() == "true"
+if USE_PROXY and not PROXY_URL:
+    print("[WARNING] Proxy enabled in .env but PROXY_HOST/PORT missing. Disabling proxy.")
+    USE_PROXY = False
 
 def get_proxies():
     """Get proxy dict based on global setting"""
