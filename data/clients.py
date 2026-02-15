@@ -14,19 +14,28 @@ import aiohttp
 from aiohttp_socks import ProxyConnector
 import requests
 import json
+import os
+from dotenv import load_dotenv
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Optional, Callable, List
 from collections import deque
 
-# Proxy configuration (Username:Password@IP:Port)
-PROXY_HOST = "109.176.204.163"
-PROXY_PORT = "51527"
-PROXY_USER = "YXMCYB9C"
-PROXY_PASS = "YHFO8MP1"
-PROXY_URL = f"http://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}"
+# Load environment variables
+load_dotenv()
 
-# Global proxy setting - can be changed at runtime
-USE_PROXY = True
+# Proxy configuration
+PROXY_HOST = os.getenv("PROXY_HOST", "")
+PROXY_PORT = os.getenv("PROXY_PORT", "")
+PROXY_USER = os.getenv("PROXY_USER", "")
+PROXY_PASS = os.getenv("PROXY_PASS", "")
+
+if PROXY_USER and PROXY_PASS:
+    PROXY_URL = f"http://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}"
+else:
+    PROXY_URL = f"http://{PROXY_HOST}:{PROXY_PORT}"
+
+# Global proxy setting
+USE_PROXY = os.getenv("USE_PROXY", "True").lower() == "true"
 
 def get_proxies():
     """Get proxy dict based on global setting"""
