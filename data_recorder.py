@@ -286,10 +286,14 @@ class DataRecorder:
         ts_iso = now_utc.isoformat()
 
         # Record BTC prices (~3Hz, shared for both market types)
-        if now_ts - self.last_btc_record_ts >= 0.3 and (self.binance_price or self.oracle_price):
+        # Write NULL for oracle if stale (no RTDS update for >30s)
+        oracle_age = now_ts - self.last_update_ts.get('oracle', 0)
+        oracle_to_record = self.oracle_price if oracle_age <= 30 else None
+
+        if now_ts - self.last_btc_record_ts >= 0.3 and (self.binance_price or oracle_to_record):
             self.db_writer.add_task(
                 "insert_btc_price", ts_iso,
-                self.binance_price, self.oracle_price, self.current_lag_ms
+                self.binance_price, oracle_to_record, self.current_lag_ms
             )
             self.last_btc_record_ts = now_ts
 
@@ -299,7 +303,7 @@ class DataRecorder:
                 snapshot = {
                     "timestamp": ts_iso,
                     "market_slug": self.current_market['slug'],
-                    "oracle_price": self.oracle_price,
+                    "oracle_price": oracle_to_record,
                     "binance_price": self.binance_price,
                     "up_bid": self.up_prices.get("bid", 0) if self.up_prices else 0,
                     "up_ask": self.up_prices.get("ask", 0) if self.up_prices else 0,
@@ -324,7 +328,7 @@ class DataRecorder:
                 snapshot_5m = {
                     "timestamp": ts_iso,
                     "market_slug": self.current_market_5m['slug'],
-                    "oracle_price": self.oracle_price,
+                    "oracle_price": oracle_to_record,
                     "binance_price": self.binance_price,
                     "up_bid": self.up_prices_5m.get("bid", 0) if self.up_prices_5m else 0,
                     "up_ask": self.up_prices_5m.get("ask", 0) if self.up_prices_5m else 0,
@@ -388,28 +392,34 @@ class DataRecorder:
             sys.stdout.flush()
 
     async def connection_health_monitor(self):
-        """Monitor connection health and alert on issues (like in original script)"""
+        """Monitor connection health and restart stale connections."""
         await asyncio.sleep(30)
         while self.running:
-            await asyncio.sleep(60)
+            await asyncio.sleep(15)
             now = time.time()
             issues = []
-            
+
             if self.last_update_ts['binance'] > 0:
                 silence = now - self.last_update_ts['binance']
                 if silence > 60:
                     issues.append(f"Binance silent for {silence:.0f}s")
-            
-            if self.last_update_ts['oracle'] > 0:
-                silence = now - self.last_update_ts['oracle']
-                if silence > 60:
-                    issues.append(f"RTDS (Oracle) silent for {silence:.0f}s")
-            
+
+            oracle_silence = now - self.last_update_ts['oracle'] if self.last_update_ts['oracle'] > 0 else 0
+            if oracle_silence > 30:
+                issues.append(f"RTDS (Oracle) silent for {oracle_silence:.0f}s")
+                self.log_event("health", f"RTDS silent for {oracle_silence:.0f}s — restarting RTDS client")
+                self.oracle_price = None
+                self.rtds_client.stop()
+                await asyncio.sleep(3)
+                self.rtds_client = RTDSClient(self.on_rtds_update)
+                asyncio.create_task(self.rtds_client.start())
+                self.last_update_ts['oracle'] = now  # Reset to avoid restart spam
+
             if self.last_update_ts['clob'] > 0:
                 silence = now - self.last_update_ts['clob']
                 if silence > 60:
                     issues.append(f"CLOB silent for {silence:.0f}s")
-            
+
             if issues:
                 msg = "Connection issues: " + " | ".join(issues)
                 self.log_event("health", msg)
