@@ -109,6 +109,34 @@ To ensure the recorder starts on boot and restarts automatically:
 
 ---
 
+## Data Quality & Anomaly Detection
+
+### ⚠️ WebSocket Data Anomalies
+Polymarket WebSocket occasionally sends anomalous data that can affect analysis accuracy. Common issues include:
+- **Equal prices**: UP and DOWN tokens showing identical prices (>$0.6)
+- **Invalid sums**: UP + DOWN token prices not summing to ~$1.00
+- **Price spikes**: Sudden price jumps (>$0.6) that revert within seconds
+
+### 🧹 Data Cleaning
+After collecting data, it's recommended to clean anomalies using the included script:
+
+```bash
+python fix_db_glitches.py
+```
+
+This script will:
+1. Scan the database for anomalous snapshots
+2. Show statistics by anomaly type
+3. Offer to fix issues via interpolation (averaging neighboring valid snapshots)
+4. Support dry-run mode to preview changes before applying
+
+**Usage modes**:
+- `dry-run`: Preview first 10 fixes without applying changes
+- `yes`: Apply all fixes to the database
+- `no`: Cancel operation
+
+---
+
 # Регистратор данных Polymarket BTC 15м и 5м (RU)
 
 Скрипт для непрерывной записи цен Bitcoin (Binance) и данных рынков Polymarket (15-минутные и 5-минутные интервалы) в режиме реального времени.
@@ -117,3 +145,29 @@ To ensure the recorder starts on boot and restarts automatically:
 - **Поддержка .env**: Все конфиденциальные данные (прокси) теперь вынесены в файл `.env`. Не забудьте создать его из `.env.example`.
 - **Два типа рынков**: Скрипт одновременно записывает данные для рынков с интервалом 15 и 5 минут.
 - **Улучшенная стабильность**: По умолчанию прокси выключен (`USE_PROXY=False`), чтобы избежать ошибок при первом запуске на сервере.
+
+## Качество данных и обнаружение аномалий
+
+### ⚠️ Аномалии в данных WebSocket
+WebSocket Polymarket иногда присылает аномальные данные, которые могут повлиять на точность анализа. Типичные проблемы:
+- **Одинаковые цены**: токены UP и DOWN показывают идентичные цены (>$0.6)
+- **Неверные суммы**: цены токенов UP + DOWN не дают в сумме ~$1.00
+- **Ценовые всплески**: резкие скачки цен (>$0.6), которые возвращаются за секунды
+
+### 🧹 Очистка данных
+После сбора данных рекомендуется очистить аномалии с помощью скрипта:
+
+```bash
+python fix_db_glitches.py
+```
+
+Скрипт выполняет:
+1. Сканирование базы данных на аномальные снапшоты
+2. Показ статистики по типам аномалий
+3. Предложение исправить проблемы через интерполяцию (усреднение соседних валидных снапшотов)
+4. Поддержка режима dry-run для предпросмотра изменений
+
+**Режимы работы**:
+- `dry-run`: Предпросмотр первых 10 исправлений без применения изменений
+- `yes`: Применить все исправления к базе данных
+- `no`: Отменить операцию
