@@ -203,7 +203,7 @@ class DataRecorder:
             elif winning_asset_id == token_ids[1]:
                 winner = "DOWN"
         
-        market_type = "5m" if "5m" in market_slug else "15m"
+        market_type = "5m" if "-5m-" in market_slug else "15m"
         msg = f"[{market_type}] Market Resolved: {market_slug} | Winner: {winner} ({winning_asset_id})"
         self.log_event("market_outcome", msg)
 
