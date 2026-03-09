@@ -22,16 +22,81 @@ from datetime import datetime
 
 DB_PATH = Path(__file__).parent.parent / '15m-synthetic' / 'db' / 'real-data.db'
 
+def get_target_price(market_slug, conn):
+    """Получить target_price из metadata первого снапшота рынка"""
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT metadata FROM market_snapshots
+        WHERE market_slug = ?
+        ORDER BY time_to_expiry DESC
+        LIMIT 1
+    """, (market_slug,))
+    
+    result = cursor.fetchone()
+    if result and result[0]:
+        try:
+            import json
+            metadata = json.loads(result[0])
+            return metadata.get('target_price')
+        except:
+            pass
+    return None
+
+
+def is_extreme_price_valid(row, oracle_price, target_price):
+    """
+    Проверяет валидность экстремальной цены (<0.04) на основе контекста.
+    
+    Экстремальная цена валидна если:
+    1. BTC далеко от target (>$100) И цена в правильном направлении
+    2. Последние 100 секунд рынка (time_to_expiry <= 100)
+    
+    Args:
+        row: снапшот с ценами
+        oracle_price: текущая цена BTC
+        target_price: целевая цена рынка
+    
+    Returns:
+        True если цена валидна (не глитч)
+    """
+    up_ask = row['up_ask']
+    down_ask = row['down_ask']
+    time_to_expiry = row['time_to_expiry']
+    
+    # Если нет oracle или target, не можем валидировать - считаем глитчем
+    if pd.isna(oracle_price) or target_price is None:
+        return False
+    
+    distance = abs(oracle_price - target_price)
+    
+    # Проверка 1: Последние 100 секунд - цены могут быть экстремальными
+    if time_to_expiry <= 100:
+        return True
+    
+    # Проверка 2: BTC далеко от target
+    if distance >= 100:
+        # UP дёшево (<0.04) валидно если BTC НИЖЕ target
+        if up_ask < 0.04 and oracle_price < target_price:
+            return True
+        
+        # DOWN дёшево (<0.04) валидно если BTC ВЫШЕ target
+        if down_ask < 0.04 and oracle_price > target_price:
+            return True
+    
+    return False
+
+
 def find_glitches(conn):
     """Найти все глитчи в БД"""
     print("Загрузка данных из БД...")
     
-    # Загрузить все снапшоты (включая глитчи с bid=0)
+    # Загрузить все снапшоты (включая oracle_price и metadata)
     df = pd.read_sql_query("""
         SELECT rowid as id, market_slug, dt, 
                up_bid, up_ask, up_mid,
                down_bid, down_ask, down_mid,
-               time_to_expiry
+               time_to_expiry,
+               oracle_price, binance_price
         FROM market_snapshots
         WHERE up_ask > 0 AND down_ask > 0
         ORDER BY market_slug, dt ASC
@@ -45,25 +110,41 @@ def find_glitches(conn):
     
     print("\nПоиск глитчей...")
     
+    # Кэш для target_price по рынкам
+    target_prices = {}
+    
+    # Кэш для target_price по рынкам
+    target_prices = {}
+    
     # Группируем по рынкам для анализа временных рядов
     for market_slug, group in df.groupby('market_slug'):
         group = group.sort_values('ts').copy()
+        
+        # Получаем target_price для этого рынка (один раз)
+        if market_slug not in target_prices:
+            target_prices[market_slug] = get_target_price(market_slug, conn)
+        
+        target_price = target_prices[market_slug]
         
         for idx in group.index:
             row = group.loc[idx]
             rowid = int(row['id'])
             
-            # ГЛИТЧ 1: Аномально низкие цены (< $0.04) - ПРОВЕРЯЕМ ПЕРВЫМ!
-            # Нормальная цена не может быть $0.001-0.03
+            # Получаем oracle_price
+            oracle_price = row['oracle_price'] if pd.notna(row['oracle_price']) else row['binance_price']
+            
+            # ГЛИТЧ 1: Аномально низкие цены (< $0.04) - ПРОВЕРЯЕМ С КОНТЕКСТОМ!
             if row['up_ask'] < 0.04 or row['down_ask'] < 0.04:
-                glitches.append({
-                    'rowid': rowid,
-                    'market_slug': market_slug,
-                    'dt': row['dt'],
-                    'type': 'anomaly_low_price',
-                    'details': f"UP ask=${row['up_ask']:.3f}, DOWN ask=${row['down_ask']:.3f}",
-                })
-                continue  # Не проверяем другие критерии для этого снапшота
+                # Проверяем валидность экстремальной цены
+                if not is_extreme_price_valid(row, oracle_price, target_price):
+                    glitches.append({
+                        'rowid': rowid,
+                        'market_slug': market_slug,
+                        'dt': row['dt'],
+                        'type': 'anomaly_low_price',
+                        'details': f"UP ask=${row['up_ask']:.3f}, DOWN ask=${row['down_ask']:.3f}, TTE={row['time_to_expiry']}s",
+                    })
+                    continue  # Не проверяем другие критерии для этого снапшота
             
             # ГЛИТЧ 2: Bid = Ask (спред = 0 или очень маленький)
             if abs(row['up_bid'] - row['up_ask']) <= 0.001 or abs(row['down_bid'] - row['down_ask']) <= 0.001:
