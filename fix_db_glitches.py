@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
-Найти и удалить глитчи из БД market_snapshots.
+Find and remove glitches from the market_snapshots database.
 
-Критерии глитчей:
-1. Bid = Ask (спред = 0 или <= $0.001)
-2. UP и DOWN равны при >$0.6 (не считая $0.5)
-3. Резкие скачки: цена меняется >$0.2 за <2 секунды, потом возвращается
-4. Аномально низкие цены: UP ask или DOWN ask < $0.04
-5. UP + DOWN сумма < 0.95 или > 1.15
+Glitch criteria:
+1. [DISABLED] Bid = Ask (spread = 0 or <= $0.001)
+2. UP and DOWN are equal when >$0.6 (excluding $0.5)
+3. Sharp spikes: price changes >$0.2 in <2 seconds, then returns
+4. Abnormally low prices: UP ask or DOWN ask < $0.04
+5. UP + DOWN sum < 0.95 or > 1.15
 
-Глитчи УДАЛЯЮТСЯ, а не интерполируются, так как:
-- Интерполяция создаёт искусственные данные
-- Удаление сохраняет реальность данных
-- Рынки записываются каждую секунду, потеря нескольких снапшотов не критична
+Glitches are DELETED, not interpolated, because:
+- Interpolation creates artificial data
+- Deletion preserves data authenticity
+- Markets are recorded every second, losing a few snapshots is not critical
 """
 import sqlite3
 import pandas as pd
@@ -23,7 +23,7 @@ from datetime import datetime
 DB_PATH = Path(__file__).parent.parent / '15m-synthetic' / 'db' / 'real-data.db'
 
 def get_target_price(market_slug, conn):
-    """Получить target_price из metadata первого снапшота рынка"""
+    """Get target_price from metadata of the first market snapshot"""
     cursor = conn.cursor()
     cursor.execute("""
         SELECT metadata FROM market_snapshots
@@ -45,41 +45,41 @@ def get_target_price(market_slug, conn):
 
 def is_extreme_price_valid(row, oracle_price, target_price):
     """
-    Проверяет валидность экстремальной цены (<0.04) на основе контекста.
+    Validates extreme price (<0.04) based on context.
     
-    Экстремальная цена валидна если:
-    1. BTC далеко от target (>$100) И цена в правильном направлении
-    2. Последние 100 секунд рынка (time_to_expiry <= 100)
+    Extreme price is valid if:
+    1. BTC is far from target (>$100) AND price is in the correct direction
+    2. Last 100 seconds of market (time_to_expiry <= 100)
     
     Args:
-        row: снапшот с ценами
-        oracle_price: текущая цена BTC
-        target_price: целевая цена рынка
+        row: snapshot with prices
+        oracle_price: current BTC price
+        target_price: market target price
     
     Returns:
-        True если цена валидна (не глитч)
+        True if price is valid (not a glitch)
     """
     up_ask = row['up_ask']
     down_ask = row['down_ask']
     time_to_expiry = row['time_to_expiry']
     
-    # Если нет oracle или target, не можем валидировать - считаем глитчем
+    # If no oracle or target, cannot validate - consider it a glitch
     if pd.isna(oracle_price) or target_price is None:
         return False
     
     distance = abs(oracle_price - target_price)
     
-    # Проверка 1: Последние 100 секунд - цены могут быть экстремальными
+    # Check 1: Last 100 seconds - prices can be extreme
     if time_to_expiry <= 100:
         return True
     
-    # Проверка 2: BTC далеко от target
+    # Check 2: BTC is far from target
     if distance >= 100:
-        # UP дёшево (<0.04) валидно если BTC НИЖЕ target
+        # UP cheap (<0.04) is valid if BTC is BELOW target
         if up_ask < 0.04 and oracle_price < target_price:
             return True
         
-        # DOWN дёшево (<0.04) валидно если BTC ВЫШЕ target
+        # DOWN cheap (<0.04) is valid if BTC is ABOVE target
         if down_ask < 0.04 and oracle_price > target_price:
             return True
     
@@ -87,10 +87,10 @@ def is_extreme_price_valid(row, oracle_price, target_price):
 
 
 def find_glitches(conn):
-    """Найти все глитчи в БД"""
-    print("Загрузка данных из БД...")
+    """Find all glitches in the database"""
+    print("Loading data from database...")
     
-    # Загрузить все снапшоты (включая oracle_price и metadata)
+    # Load all snapshots (including oracle_price and metadata)
     df = pd.read_sql_query("""
         SELECT rowid as id, market_slug, dt, 
                up_bid, up_ask, up_mid,
@@ -102,25 +102,25 @@ def find_glitches(conn):
         ORDER BY market_slug, dt ASC
     """, conn)
     
-    print(f"Загружено {len(df)} снапшотов")
+    print(f"Loaded {len(df)} snapshots")
     
     df['ts'] = pd.to_datetime(df['dt'], format='ISO8601').astype('int64') // 10**9
     
     glitches = []
     
-    print("\nПоиск глитчей...")
+    print("\nSearching for glitches...")
     
-    # Кэш для target_price по рынкам
+    # Cache for target_price by market
     target_prices = {}
     
-    # Кэш для target_price по рынкам
+    # Cache for target_price by market
     target_prices = {}
     
-    # Группируем по рынкам для анализа временных рядов
+    # Group by markets for time series analysis
     for market_slug, group in df.groupby('market_slug'):
         group = group.sort_values('ts').copy()
         
-        # Получаем target_price для этого рынка (один раз)
+        # Get target_price for this market (once)
         if market_slug not in target_prices:
             target_prices[market_slug] = get_target_price(market_slug, conn)
         
@@ -130,12 +130,12 @@ def find_glitches(conn):
             row = group.loc[idx]
             rowid = int(row['id'])
             
-            # Получаем oracle_price
+            # Get oracle_price
             oracle_price = row['oracle_price'] if pd.notna(row['oracle_price']) else row['binance_price']
             
-            # ГЛИТЧ 1: Аномально низкие цены (< $0.04) - ПРОВЕРЯЕМ С КОНТЕКСТОМ!
+            # GLITCH 1: Abnormally low prices (< $0.04) - CHECK WITH CONTEXT!
             if row['up_ask'] < 0.04 or row['down_ask'] < 0.04:
-                # Проверяем валидность экстремальной цены
+                # Check validity of extreme price
                 if not is_extreme_price_valid(row, oracle_price, target_price):
                     glitches.append({
                         'rowid': rowid,
@@ -144,20 +144,21 @@ def find_glitches(conn):
                         'type': 'anomaly_low_price',
                         'details': f"UP ask=${row['up_ask']:.3f}, DOWN ask=${row['down_ask']:.3f}, TTE={row['time_to_expiry']}s",
                     })
-                    continue  # Не проверяем другие критерии для этого снапшота
+                    continue  # Don't check other criteria for this snapshot
             
-            # ГЛИТЧ 2: Bid = Ask (спред = 0 или очень маленький)
-            if abs(row['up_bid'] - row['up_ask']) <= 0.001 or abs(row['down_bid'] - row['down_ask']) <= 0.001:
-                glitches.append({
-                    'rowid': rowid,
-                    'market_slug': market_slug,
-                    'dt': row['dt'],
-                    'type': 'zero_spread',
-                    'details': f"UP bid=${row['up_bid']:.3f} ask=${row['up_ask']:.3f}, DOWN bid=${row['down_bid']:.3f} ask=${row['down_ask']:.3f}",
-                })
-                continue
+            # GLITCH 2: Bid = Ask (spread = 0 or very small)
+            # DISABLED: Zero spread can be a valid market state
+            # if abs(row['up_bid'] - row['up_ask']) <= 0.001 or abs(row['down_bid'] - row['down_ask']) <= 0.001:
+            #     glitches.append({
+            #         'rowid': rowid,
+            #         'market_slug': market_slug,
+            #         'dt': row['dt'],
+            #         'type': 'zero_spread',
+            #         'details': f"UP bid=${row['up_bid']:.3f} ask=${row['up_ask']:.3f}, DOWN bid=${row['down_bid']:.3f} ask=${row['down_ask']:.3f}",
+            #     })
+            #     continue
             
-            # ГЛИТЧ 3: UP и DOWN равны при >$0.6 (не считая $0.5)
+            # GLITCH 3: UP and DOWN are equal when >$0.6 (excluding $0.5)
             up_mid = row['up_mid']
             down_mid = row['down_mid']
             
@@ -171,11 +172,11 @@ def find_glitches(conn):
                 })
                 continue
             
-            # ГЛИТЧ 4: UP + DOWN сумма неправильная
-            # Используем ask цены (цены покупки), так как они важнее для нас
+            # GLITCH 4: UP + DOWN sum is incorrect
+            # Use ask prices (buy prices) as they are more important for us
             total = row['up_ask'] + row['down_ask']
             
-            # Сумма должна быть от $0.95 до $1.15 (обычно >$1 из-за спреда)
+            # Sum should be between $0.95 and $1.15 (usually >$1 due to spread)
             if total < 0.95 or total > 1.15:
                 glitches.append({
                     'rowid': rowid,
@@ -186,7 +187,7 @@ def find_glitches(conn):
                 })
                 continue
             
-            # ГЛИТЧ 5: Резкие скачки (проверяем только если есть предыдущий и следующий снапшот)
+            # GLITCH 5: Sharp spikes (check only if there are previous and next snapshots)
             group_list = group.index.tolist()
             idx_pos = group_list.index(idx)
             
@@ -197,18 +198,21 @@ def find_glitches(conn):
                 prev = group.loc[prev_idx]
                 next_row = group.loc[next_idx]
                 
-                # Проверяем временной интервал
+                # Check time interval
                 dt_prev = row['ts'] - prev['ts']
                 dt_next = next_row['ts'] - row['ts']
+                dt_total = next_row['ts'] - prev['ts']  # Total interval between prev and next
                 
-                if dt_prev < 2 and dt_next < 2:  # В пределах 2 секунд
-                    # Проверяем DOWN ask (самая важная цена для нас)
+                # IMPORTANT: Check total interval to avoid counting spike after glitch removal
+                # If >5 seconds passed between prev and next, it's not a spike, just different time points
+                if dt_prev < 2 and dt_next < 2 and dt_total <= 5:  # Within 2 seconds each, and total interval <=5 sec
+                    # Check DOWN ask (most important price for us)
                     down_ask_change_in = abs(row['down_ask'] - prev['down_ask'])
                     down_ask_change_out = abs(next_row['down_ask'] - row['down_ask'])
                     
-                    # Если цена скакнула >$0.2, потом вернулась (увеличен порог с $0.1 до $0.2)
+                    # If price jumped >$0.2, then returned (threshold increased from $0.1 to $0.2)
                     if down_ask_change_in > 0.2 and down_ask_change_out > 0.2:
-                        # Проверяем, что до и после цены похожи
+                        # Check that prices before and after are similar
                         if abs(prev['down_ask'] - next_row['down_ask']) < 0.1:
                             glitches.append({
                                 'rowid': rowid,
@@ -219,7 +223,7 @@ def find_glitches(conn):
                             })
                             continue
                     
-                    # Также проверяем UP ask
+                    # Also check UP ask
                     up_ask_change_in = abs(row['up_ask'] - prev['up_ask'])
                     up_ask_change_out = abs(next_row['up_ask'] - row['up_ask'])
                     
@@ -237,25 +241,25 @@ def find_glitches(conn):
 
 
 def delete_glitches(conn, glitches_df, dry_run=True):
-    """Удалить глитчи из БД"""
+    """Delete glitches from the database"""
     if len(glitches_df) == 0:
-        print("Нет глитчей для удаления")
+        print("No glitches to delete")
         return
     
     print(f"\n{'='*100}")
-    print(f"УДАЛЕНИЕ ГЛИТЧЕЙ ({'DRY RUN' if dry_run else 'РЕАЛЬНОЕ'})")
+    print(f"DELETING GLITCHES ({'DRY RUN' if dry_run else 'REAL'})")
     print(f"{'='*100}")
     
     cursor = conn.cursor()
     
-    # Проверяем текущее количество снапшотов
+    # Check current number of snapshots
     cursor.execute("SELECT COUNT(*) FROM market_snapshots")
     total_before = cursor.fetchone()[0]
-    print(f"\nСнапшотов в БД до удаления: {total_before}")
-    print(f"Глитчей к удалению: {len(glitches_df)}")
+    print(f"\nSnapshots in DB before deletion: {total_before}")
+    print(f"Glitches to delete: {len(glitches_df)}")
     
     if not dry_run:
-        # Удаляем глитчи
+        # Delete glitches
         deleted = 0
         for idx, glitch in glitches_df.iterrows():
             market_slug = glitch['market_slug']
@@ -269,19 +273,19 @@ def delete_glitches(conn, glitches_df, dry_run=True):
             deleted += cursor.rowcount
             
             if (idx + 1) % 1000 == 0:
-                print(f"  Удалено {idx + 1}/{len(glitches_df)} глитчей...")
+                print(f"  Deleted {idx + 1}/{len(glitches_df)} glitches...")
         
         conn.commit()
         
-        # Проверяем результат
+        # Check result
         cursor.execute("SELECT COUNT(*) FROM market_snapshots")
         total_after = cursor.fetchone()[0]
         
-        print(f"\n✅ Удалено {deleted} глитчей")
-        print(f"Снапшотов в БД после удаления: {total_after}")
-        print(f"Разница: {total_before - total_after}")
+        print(f"\n✅ Deleted {deleted} glitches")
+        print(f"Snapshots in DB after deletion: {total_after}")
+        print(f"Difference: {total_before - total_after}")
         
-        # Проверяем, что рынки остались целыми
+        # Check that markets remain intact
         cursor.execute("""
             SELECT market_slug, COUNT(*) as count
             FROM market_snapshots
@@ -292,62 +296,62 @@ def delete_glitches(conn, glitches_df, dry_run=True):
         
         small_markets = cursor.fetchall()
         if small_markets:
-            print(f"\n⚠️  Рынков с <100 снапшотов: {len(small_markets)}")
-            print("Первые 10:")
+            print(f"\n⚠️  Markets with <100 snapshots: {len(small_markets)}")
+            print("First 10:")
             for market, count in small_markets[:10]:
-                print(f"  {market}: {count} снапшотов")
+                print(f"  {market}: {count} snapshots")
         else:
-            print(f"\n✅ Все рынки имеют достаточно снапшотов")
+            print(f"\n✅ All markets have sufficient snapshots")
     else:
-        print(f"\n(DRY RUN: изменения не применены)")
-        print(f"Будет удалено: {len(glitches_df)} снапшотов")
-        print(f"Останется: {total_before - len(glitches_df)} снапшотов")
+        print(f"\n(DRY RUN: changes not applied)")
+        print(f"Will be deleted: {len(glitches_df)} snapshots")
+        print(f"Will remain: {total_before - len(glitches_df)} snapshots")
 
 
 def main():
     print("="*100)
-    print("ПОИСК И УДАЛЕНИЕ ГЛИТЧЕЙ ИЗ БД")
+    print("SEARCH AND DELETE GLITCHES FROM DATABASE")
     print("="*100)
     
     conn = sqlite3.connect(DB_PATH)
     
-    # Найти глитчи
+    # Find glitches
     glitches_df = find_glitches(conn)
     
     print(f"\n{'='*100}")
-    print(f"НАЙДЕНО ГЛИТЧЕЙ: {len(glitches_df)}")
+    print(f"GLITCHES FOUND: {len(glitches_df)}")
     print(f"{'='*100}")
     
     if len(glitches_df) > 0:
-        # Статистика по типам
-        print("\nПо типам:")
+        # Statistics by type
+        print("\nBy type:")
         for glitch_type, count in glitches_df['type'].value_counts().items():
             print(f"  {glitch_type}: {count}")
         
-        # Сохранить в CSV
+        # Save to CSV
         csv_path = 'glitches_found.csv'
         glitches_df.to_csv(csv_path, index=False)
-        print(f"\n[OK] Глитчи сохранены в {csv_path}")
+        print(f"\n[OK] Glitches saved to {csv_path}")
         
-        # Показать первые 20 глитчей
-        print(f"\nПервые 20 глитчей:")
-        print(f"{'#':<5} {'Тип':<15} {'Рынок':<30} {'Время':<30} {'Детали':<50}")
+        # Show first 20 glitches
+        print(f"\nFirst 20 glitches:")
+        print(f"{'#':<5} {'Type':<15} {'Market':<30} {'Time':<30} {'Details':<50}")
         print("-"*130)
         
         for idx, glitch in glitches_df.head(20).iterrows():
             print(f"{idx+1:<5} {glitch['type']:<15} {glitch['market_slug'][-30:]:<30} "
                   f"{glitch['dt'][-30:]:<30} {glitch['details']:<50}")
         
-        # Спросить, удалять ли
+        # Ask whether to delete
         print(f"\n{'='*100}")
-        response = input(f"Удалить {len(glitches_df)} глитчей? (yes/no/dry-run): ").strip().lower()
+        response = input(f"Delete {len(glitches_df)} glitches? (yes/no/dry-run): ").strip().lower()
         
         if response == 'yes':
             delete_glitches(conn, glitches_df, dry_run=False)
         elif response == 'dry-run':
             delete_glitches(conn, glitches_df, dry_run=True)
         else:
-            print("Отменено")
+            print("Cancelled")
     
     conn.close()
 
